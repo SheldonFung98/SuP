@@ -6,7 +6,7 @@ import torch
 from geotransformer.modules.ops import grid_subsample, radius_search, grid_subsample_dps, point_to_node_partition
 from geotransformer.utils.torch import build_dataloader
 from geotransformer.modules.ops import index_select
-from torch_cluster import fps
+# from torch_cluster import fps
 # Stack mode utilities
 
 def add_entropy_from_up(data_dict):  # 从上采样点计算每个下采样点的熵
