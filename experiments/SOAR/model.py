@@ -624,7 +624,6 @@ class GeoTransformer(nn.Module):
 				.add_pcd(ref_points_c).add_pcd(src_points_c, transform)\
 				.add_lines(ref_points_c[ref_node_corr_indices_merged], apply_transform(src_points_c, transform)[src_node_corr_indices_merged], colors=score_color).show()
 
-
 		return output_dict
 failed_ind = []
 

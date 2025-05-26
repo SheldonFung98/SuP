@@ -30,9 +30,8 @@ def all_reduce_tensors(x, world_size=1):
     elif isinstance(x, dict):
         x = {key: all_reduce_tensors(value, world_size=world_size) for key, value in x.items()}
     elif isinstance(x, torch.Tensor):
-        x = all_reduce_tensor(x, world_size=world_size)
+        x = x if x.dtype == torch.bool else all_reduce_tensor(x, world_size=world_size)
     return x
-
 
 # Dataloader Utilities
 

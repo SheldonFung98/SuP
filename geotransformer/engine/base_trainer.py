@@ -69,6 +69,7 @@ class BaseTrainer(abc.ABC):
         if not torch.cuda.is_available():
             raise RuntimeError('No CUDA devices available.')
         if self.distributed:
+            torch.cuda.set_device(self.local_rank)
             dist.init_process_group(backend='nccl')
             self.logger.info(f'Using DistributedDataParallel mode (world_size: {self.world_size})')
         else:
