@@ -388,14 +388,13 @@ class GeoTransformer(nn.Module):
 			Ts,
 			tf_gt=transform if self.training else None,
 		)
-		weights[:, 4] = w_facw
-		output_dict['w_facw'] = w_facw
-		output_dict['all_weights'] = weights
-
 		if self.training:
 			weights = weights[sel_tf_ind]
 			Ts = Ts[sel_tf_ind]
 
+		weights[:, 4] = w_facw
+		output_dict['w_facw'] = w_facw
+		output_dict['all_weights'] = weights
 		# w1 = weights[:, 1]
 		# w1 = w1 / w1.max()
 		# w3 = weights[:, 3]
