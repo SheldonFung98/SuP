@@ -16,7 +16,7 @@ from geotransformer.utils.summary_board import SummaryBoard
 from geotransformer.utils.timer import Timer
 from geotransformer.utils.torch import all_reduce_tensors, release_cuda, initialize
 from geotransformer.engine.logger import Logger
-
+import os
 
 def inject_default_parser(parser=None):
     if parser is None:
@@ -25,7 +25,6 @@ def inject_default_parser(parser=None):
     parser.add_argument('--snapshot', default=None, help='load from snapshot')
     parser.add_argument('--epoch', type=int, default=None, help='load epoch')
     parser.add_argument('--log_steps', type=int, default=10, help='logging steps')
-    parser.add_argument('--local_rank', type=int, default=-1, help='local rank for ddp')
     return parser
 
 
@@ -44,9 +43,15 @@ class BaseTrainer(abc.ABC):
         parser = inject_default_parser(parser)
         self.args = parser.parse_args()
 
+        # environment
+        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        self.distributed = self.world_size > 1
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        self.rank = int(os.environ.get("RANK", 0))
+        
         # logger
         log_file = osp.join(cfg.log_dir, 'train-{}.log'.format(time.strftime('%Y%m%d-%H%M%S')))
-        self.logger = Logger(log_file=log_file, local_rank=self.args.local_rank)
+        self.logger = Logger(log_file=log_file, local_rank=self.local_rank)
 
         # command executed
         message = 'Command executed: ' + ' '.join(sys.argv)
@@ -63,12 +68,8 @@ class BaseTrainer(abc.ABC):
         # cuda and distributed
         if not torch.cuda.is_available():
             raise RuntimeError('No CUDA devices available.')
-        self.distributed = self.args.local_rank != -1
         if self.distributed:
-            torch.cuda.set_device(self.args.local_rank)
             dist.init_process_group(backend='nccl')
-            self.world_size = dist.get_world_size()
-            self.local_rank = self.args.local_rank
             self.logger.info(f'Using DistributedDataParallel mode (world_size: {self.world_size})')
         else:
             if torch.cuda.device_count() > 1:
