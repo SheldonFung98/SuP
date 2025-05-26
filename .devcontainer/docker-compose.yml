@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  soar:
+    image: soar:latest
+    build:
+      context: ..
+      dockerfile: ./.devcontainer/Dockerfile
+    stdin_open: true
+    tty: true
+    shm_size: '64gb'
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
+      DISPLAY: $DISPLAY
+    volumes:
+      - ../:/workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    working_dir: /workspace
+    command: /bin/bash
+    deploy:
+      resources:
+        reservations:
+          devices: # Reserve all GPU resources
+            - driver: nvidia
+              capabilities: [gpu]
+

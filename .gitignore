@@ -1,0 +1,12 @@
+build/
+*.egg-info/
+*.egg
+output/
+dataset/
+.vscode/
+*.pyc
+*.tar
+*.so
+Color3DMatch-DAC/
+dataset
+weights/

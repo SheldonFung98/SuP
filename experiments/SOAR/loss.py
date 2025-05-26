@@ -1,0 +1,228 @@
+import torch
+import torch.nn as nn
+
+from geotransformer.modules.loss import WeightedCircleLoss
+from geotransformer.modules.ops.transformation import apply_transform
+from geotransformer.modules.registration.metrics import isotropic_transform_error
+from geotransformer.modules.ops.pairwise_distance import pairwise_distance
+
+
+class CoarseMatchingLoss(nn.Module):
+    def __init__(self, cfg):
+        super(CoarseMatchingLoss, self).__init__()
+        self.weighted_circle_loss = WeightedCircleLoss(
+            cfg.coarse_loss.positive_margin,
+            cfg.coarse_loss.negative_margin,
+            cfg.coarse_loss.positive_optimal,
+            cfg.coarse_loss.negative_optimal,
+            cfg.coarse_loss.log_scale,
+        )
+        self.positive_overlap = cfg.coarse_loss.positive_overlap
+
+    def forward(self, output_dict):
+        ref_feats = output_dict['ref_feats_c']
+        src_feats = output_dict['src_feats_c']
+        gt_node_corr_indices = output_dict['gt_node_corr_indices']
+        gt_node_corr_overlaps = output_dict['gt_node_corr_overlaps']
+        gt_ref_node_corr_indices = gt_node_corr_indices[:, 0]
+        gt_src_node_corr_indices = gt_node_corr_indices[:, 1]
+
+        feat_dists = torch.sqrt(pairwise_distance(ref_feats, src_feats, normalized=True))
+
+        overlaps = torch.zeros_like(feat_dists)
+        overlaps[gt_ref_node_corr_indices, gt_src_node_corr_indices] = gt_node_corr_overlaps
+        pos_masks = torch.gt(overlaps, self.positive_overlap)
+        neg_masks = torch.eq(overlaps, 0)
+        pos_scales = torch.sqrt(overlaps * pos_masks.float())
+
+        loss = self.weighted_circle_loss(pos_masks, neg_masks, feat_dists, pos_scales)
+        if torch.isnan(loss).sum() > 0:
+            print("course:")
+            print(torch.isnan(ref_feats).sum(), torch.isnan(src_feats).sum(),
+                  torch.isnan(feat_dists).sum(), torch.isnan(pos_masks).sum(),)
+            raise TypeError('nan')
+        return loss
+
+
+class FineMatchingLoss(nn.Module):
+    def __init__(self, cfg):
+        super(FineMatchingLoss, self).__init__()
+        self.positive_radius = cfg.fine_loss.positive_radius
+
+    def forward(self, output_dict, data_dict):
+        ref_node_corr_knn_points = output_dict['ref_node_corr_knn_points']
+        src_node_corr_knn_points = output_dict['src_node_corr_knn_points']
+        ref_node_corr_knn_masks = output_dict['ref_node_corr_knn_masks']
+        src_node_corr_knn_masks = output_dict['src_node_corr_knn_masks']
+        matching_scores = output_dict['matching_scores']
+        transform = data_dict['transform']
+
+        src_node_corr_knn_points = apply_transform(src_node_corr_knn_points, transform)
+        dists = pairwise_distance(ref_node_corr_knn_points, src_node_corr_knn_points)  # (B, N, M)
+        gt_masks = torch.logical_and(ref_node_corr_knn_masks.unsqueeze(2), src_node_corr_knn_masks.unsqueeze(1))
+        gt_corr_map = torch.lt(dists, self.positive_radius ** 2)
+        gt_corr_map = torch.logical_and(gt_corr_map, gt_masks)
+        slack_row_labels = torch.logical_and(torch.eq(gt_corr_map.sum(2), 0), ref_node_corr_knn_masks)
+        slack_col_labels = torch.logical_and(torch.eq(gt_corr_map.sum(1), 0), src_node_corr_knn_masks)
+
+        labels = torch.zeros_like(matching_scores, dtype=torch.bool)
+        labels[:, :-1, :-1] = gt_corr_map
+        labels[:, :-1, -1] = slack_row_labels
+        labels[:, -1, :-1] = slack_col_labels
+
+        loss = -matching_scores[labels].mean()
+        if torch.isnan(loss).sum() > 0:
+            print("fine:")
+            print(torch.isnan(labels).sum(), torch.isnan(matching_scores).sum(),
+                  torch.isnan(ref_node_corr_knn_points).sum(), torch.isnan(src_node_corr_knn_masks).sum(),
+                  torch.isnan(slack_col_labels).sum())
+            raise TypeError('nan')
+        return loss
+
+
+class FeatureConsistencyLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.acceptance_rmse = 0.2
+
+    def compute_rmse(self, est_transform, src_points, gt_transform, acceptance_rmse=0.2):
+        points = src_points[None, ...].repeat(est_transform.shape[0], 1, 1)
+        realignment_transform = torch.matmul(torch.inverse(gt_transform), est_transform)
+        realigned_src_points_f = apply_transform(points, realignment_transform)
+        rmse = torch.linalg.norm(realigned_src_points_f - points, dim=-1).mean(dim=-1)
+        return rmse
+
+    def forward(self, output_dict, data_dict):
+        w_facw = output_dict['w_facw']
+        Ts = output_dict["estimated_transforms"]
+        src_points = output_dict['src_points']
+        gt_transform = data_dict['transform']
+        rmse = self.compute_rmse(Ts, src_points, gt_transform)
+        weights = 1 - rmse
+        gt = (rmse < self.acceptance_rmse).float()
+        weights[rmse < self.acceptance_rmse] = 1
+        weights[rmse > 0.3] = 1
+        l = weights*(w_facw - gt).abs()
+        pos_masks = torch.gt(gt, 0)
+        neg_masks = torch.eq(gt, 0)
+        loss = 0
+        if pos_masks.sum() > 0:
+            loss += l[pos_masks].mean()
+        if neg_masks.sum() > 0:
+            loss += l[neg_masks].mean()
+        return loss
+
+
+class OverallLoss(nn.Module):
+    def __init__(self, cfg):
+        super(OverallLoss, self).__init__()
+        self.coarse_loss = CoarseMatchingLoss(cfg)
+        self.fine_loss = FineMatchingLoss(cfg)
+        self.facw_loss = FeatureConsistencyLoss()
+        self.weight_coarse_loss = cfg.loss.weight_coarse_loss
+        self.weight_fine_loss = cfg.loss.weight_fine_loss
+        self.weight_facw_loss = 1.0
+
+    def forward(self, output_dict, data_dict):
+        coarse_loss = self.coarse_loss(output_dict)
+
+        fine_loss = self.fine_loss(output_dict, data_dict)
+        facw_loss = self.facw_loss(output_dict, data_dict)
+
+        # loss = self.weight_coarse_loss * coarse_loss + self.weight_fine_loss * fine_loss + self.weight_facw_loss * facw_loss
+        loss = self.weight_facw_loss * facw_loss
+        return {
+            'loss': loss,
+            'c_loss': coarse_loss,
+            'f_loss': fine_loss,
+            'facw_loss': facw_loss,
+        }
+
+
+class Evaluator(nn.Module):
+    def __init__(self, cfg):
+        super(Evaluator, self).__init__()
+        self.acceptance_overlap = cfg.eval.acceptance_overlap
+        self.acceptance_radius = cfg.eval.acceptance_radius
+        self.acceptance_rmse = cfg.eval.rmse_threshold
+
+    @torch.no_grad()
+    def evaluate_coarse(self, output_dict):
+        ref_length_c = output_dict['ref_points_c'].shape[0]
+        src_length_c = output_dict['src_points_c'].shape[0]
+        gt_node_corr_overlaps = output_dict['gt_node_corr_overlaps']
+        gt_node_corr_indices = output_dict['gt_node_corr_indices']
+        masks = torch.gt(gt_node_corr_overlaps, self.acceptance_overlap)
+        gt_node_corr_indices = gt_node_corr_indices[masks]
+        gt_ref_node_corr_indices = gt_node_corr_indices[:, 0]
+        gt_src_node_corr_indices = gt_node_corr_indices[:, 1]
+        gt_node_corr_map = torch.zeros(ref_length_c, src_length_c).cuda()
+        gt_node_corr_map[gt_ref_node_corr_indices, gt_src_node_corr_indices] = 1.0
+
+        ref_node_corr_indices = output_dict['ref_node_corr_indices']
+        src_node_corr_indices = output_dict['src_node_corr_indices']
+
+        precision = gt_node_corr_map[ref_node_corr_indices, src_node_corr_indices].mean()
+
+        return precision
+
+    @torch.no_grad()
+    def evaluate_fine(self, output_dict, data_dict):
+        transform = data_dict['transform']
+        ref_corr_points = output_dict['ref_corr_points']
+        src_corr_points = output_dict['src_corr_points']
+        src_corr_points = apply_transform(src_corr_points, transform)
+        corr_distances = torch.linalg.norm(ref_corr_points - src_corr_points, dim=1)
+        precision = torch.lt(corr_distances, self.acceptance_radius).float().mean()
+        return precision
+
+    @torch.no_grad()
+    def evaluate_registration(self, output_dict, data_dict):
+        transform = data_dict['transform']
+        est_transform = output_dict['estimated_transform']
+        src_points = output_dict['src_points']
+
+        rre, rte = isotropic_transform_error(transform, est_transform)
+
+        realignment_transform = torch.matmul(torch.inverse(transform), est_transform)
+        realigned_src_points_f = apply_transform(src_points, realignment_transform)
+        rmse = torch.linalg.norm(realigned_src_points_f - src_points, dim=1).mean()
+        recall = torch.lt(rmse, self.acceptance_rmse).float()
+
+        return rre, rte, rmse, recall
+
+    @torch.no_grad()
+    def evaluate_coarse_registration(self, output_dict, data_dict, coarse_acceptance_rmse=0.3):
+        transform = data_dict['transform']
+        sel_est_transforms = output_dict['sel_estimated_transform'].view(-1, 4, 4)
+        est_transforms = output_dict['estimated_transforms'].view(-1, 4, 4)
+        src_points = output_dict['src_points']
+        def compute_recall(est_transform, acceptance_rmse=0.2):
+            realignment_transform = torch.matmul(torch.inverse(transform), est_transform)
+            realigned_src_points_f = apply_transform(src_points, realignment_transform)
+            rmse = torch.linalg.norm(realigned_src_points_f - src_points, dim=1).mean()
+            recall = torch.lt(rmse, acceptance_rmse).float()
+            return recall
+        return torch.stack([compute_recall(est_transform, self.acceptance_rmse) for est_transform in est_transforms]).any(), \
+            torch.stack([compute_recall(est_transform, coarse_acceptance_rmse) for est_transform in est_transforms]).any(), \
+            torch.stack([compute_recall(est_transform, self.acceptance_rmse) for est_transform in sel_est_transforms]).any()
+
+
+    def forward(self, output_dict, data_dict):
+        c_precision = self.evaluate_coarse(output_dict)
+        f_precision = self.evaluate_fine(output_dict, data_dict)
+        rre, rte, rmse, recall = self.evaluate_registration(output_dict, data_dict)
+        all_recalls, all_recalls03, sel_recall = self.evaluate_coarse_registration(output_dict, data_dict)
+
+        return {
+            'PIR': c_precision,
+            'IR': f_precision,
+            'RRE': rre,
+            'RTE': rte,
+            'RMSE': rmse,
+            'RR': recall,
+            "aRR": all_recalls,
+            "aRR@0.3": all_recalls03,
+            "sRR": sel_recall,
+        }
+

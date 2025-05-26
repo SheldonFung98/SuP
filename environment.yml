@@ -1,0 +1,13 @@
+# Run: conda env create -f environment.yml
+name: colorpcr
+channels:
+  - conda-forge
+  - defaults
+  - anaconda
+  - pytorch
+  - nvidia
+dependencies:
+  - pytorch==1.13.1
+  - torchvision==0.14.1
+  - torchaudio==0.13.1
+  - pytorch-cuda=11.6
