@@ -19,13 +19,16 @@ import numpy as np
 from backbone import KPConvFPN
 import time
 import utils
-# from pointscope import PointScopeClient as PSC
+try:
+	from pointscope import PointScopeClient as PSC
+except ImportError:
+	pass
 from geotransformer.modules.ops import pairwise_distance
 from Laplacian_TS import pair2globalT_cycle
 from geotransformer.modules.ops.transformation import apply_transform
 
 # from feat_module import FeatureAlignmentConsistencyWeighting, FeatureConsistencyWeighting
-from feat_module import FeatureConsistencyWeighting
+from fcw_module import FeatureConsistencyWeighting
 from geotransformer.modules.registration import weighted_procrustes
 
 
@@ -379,14 +382,22 @@ class GeoTransformer(nn.Module):
 			weights[i, 0] = ov_weights[i]
 			corr_weight = (apply_transform(src_corr_points, estimated_transform) - ref_corr_points).square().sum(dim=1).sqrt().mean()
 			weights[i, 1] = torch.exp(-2*corr_weight)
-
+			wfbs_m = utils.compute_feature_base_consistency_(
+				ref_points_m,
+				src_points_m,
+				ref_feats_m,
+				src_feats_m,
+				estimated_transform,
+				radius=0.06, alpha=0.08, top_k=1
+			)
+			weights[i, 3] = 0 if isinstance(wfbs_m, int) else wfbs_m.float()
+		
 		w_facw, sel_tf_ind = self.facw(
-			ref_points_f, 
-			src_points_f,
-			ref_feats_f,
-			src_feats_f,
-			Ts,
-			tf_gt=transform if self.training else None,
+			ref_points_m, ref_points_f,
+			src_points_m, src_points_f,
+			ref_feats_m, ref_feats_f,
+			src_feats_m, src_feats_f,
+			Ts, tf_gt=transform if self.training else None,
 		)
 		if self.training:
 			weights = weights[sel_tf_ind]
@@ -409,8 +420,10 @@ class GeoTransformer(nn.Module):
 		# 	# merged_weights = w_facw * weights[:, 0] * weights[:, 1] * weights[:, 3] * weights[:, 4]
 		# 	# merged_weights = w_facw * weights[:, 3] * weights[:, 4]
 		# 	pass
+		w3 = weights[:, 3]
+		w3 = w3 / w3.max()
 		with torch.no_grad():
-			merged_weights = 0.5 * weights[:, 1] + weights[:, 4]
+			merged_weights = 0.4 * weights[:, 1] + weights[:, 4] + w3
 
 		merged_weights[merged_weights.isnan()] = 0
 		sel_weights, sel_ind = merged_weights.view(-1).topk(3)
@@ -427,34 +440,7 @@ class GeoTransformer(nn.Module):
 			output_dict['corr_scores'] = corr_scores
 			output_dict['ref_node_corr_indices'] = ref_node_corr_indices[final_sel]
 			output_dict['src_node_corr_indices'] = src_node_corr_indices[final_sel]
-		elif False:
-			# top-k unique merge
-			sel_weights, sel_ind = merged_weights.view(-1).topk(8)
-			ref_node_corr_indices = ref_node_corr_indices[sel_ind]
-			src_node_corr_indices = src_node_corr_indices[sel_ind]
-			corr_indices_stack = torch.stack([ref_node_corr_indices.view(-1), src_node_corr_indices.view(-1)]).T
-			corr_indices_cat_unique = (corr_indices_stack[:, 0] * 1000 + corr_indices_stack[:, 1]).unique()
-			corr_indices_unique_stack = torch.stack([corr_indices_cat_unique // 1000, corr_indices_cat_unique % 1000], dim=1)
-			ref_node_corr_indices_unique = corr_indices_unique_stack[:, 0]
-			src_node_corr_indices_unique = corr_indices_unique_stack[:, 1]
-			node_corr_scores = node_corr_scores[sel_ind]
-			_, _, _, estimated_transform = self.blockwise_transform_est(
-				ref_node_corr_indices_unique,
-				src_node_corr_indices_unique,
-				node_corr_scores,
-				ref_feats_f,
-				src_feats_f,
-				ref_node_knn_points,
-				src_node_knn_points,
-				ref_node_knn_indices,
-				src_node_knn_indices,
-				ref_node_knn_masks,
-				src_node_knn_masks,
-				feats_f,
-				output_dict
-			)
-			output_dict['estimated_transform'] = estimated_transform
-		elif True:
+		else:
 			# Close coarse node unique merge
 			dist_thr = 0.1
 			sel_weights, sel_ind = merged_weights.view(-1).topk(8)
@@ -501,46 +487,6 @@ class GeoTransformer(nn.Module):
 				output_dict
 			)
 			output_dict['estimated_transform'] = estimated_transform
-		elif False:
-			# Close fine corrrespondences merge & solve with weighted SVD
-			dist_thr = 0.1
-			sel_weights, sel_ind = merged_weights.view(-1).topk(8)
-			ref_corr_merged, src_corr_merged, corr_scores_merged = [], [], []
-			for ind, each_res in enumerate([match_res[i] for i in sel_ind]):
-				ref_corr_points, src_corr_points, corr_scores, tf = each_res
-				src_corr_points_tf = apply_transform(src_corr_points, tf)
-				corr_dists = (src_corr_points_tf - ref_corr_points).square().sum(dim=1).sqrt()
-				corr_mask = corr_dists < dist_thr
-				if corr_mask.any():
-					ref_corr_merged.append(ref_corr_points[corr_mask])
-					src_corr_merged.append(src_corr_points[corr_mask])
-					corr_scores_merged.append(corr_scores[corr_mask])
-
-			ref_corr_merged = torch.cat(ref_corr_merged, dim=0)
-			src_corr_merged = torch.cat(src_corr_merged, dim=0)
-			corr_scores_merged = torch.cat(corr_scores_merged, dim=0)
-			estimated_transform = weighted_procrustes(
-				src_corr_merged, 
-				ref_corr_merged, 
-				weights=corr_scores_merged, 
-				return_transform=True
-			)
-			output_dict['estimated_transform'] = estimated_transform
-
-			ref_node_corr_indices = ref_node_corr_indices[sel_ind]
-			src_node_corr_indices = src_node_corr_indices[sel_ind]
-			corr_indices_stack = torch.stack([ref_node_corr_indices.view(-1), src_node_corr_indices.view(-1)]).T
-			corr_indices_cat_unique = (corr_indices_stack[:, 0] * 1000 + corr_indices_stack[:, 1]).unique()
-			corr_indices_unique_stack = torch.stack([corr_indices_cat_unique // 1000, corr_indices_cat_unique % 1000], dim=1)
-			ref_node_corr_indices_unique = corr_indices_unique_stack[:, 0]
-			src_node_corr_indices_unique = corr_indices_unique_stack[:, 1]
-			output_dict['ref_node_corr_indices'] = ref_node_corr_indices_unique
-			output_dict['src_node_corr_indices'] = src_node_corr_indices_unique
-
-			output_dict['ref_corr_points'] = ref_corr_merged
-			output_dict['src_corr_points'] = src_corr_merged
-			output_dict['corr_scores'] = corr_scores_merged
-
 
 		if True and not compute_recall(estimated_transform, transform, src_points_f):
 			failed_ind.append(data_dict['index'])

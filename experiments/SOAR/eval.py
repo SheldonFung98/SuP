@@ -433,10 +433,9 @@ anchor_num=6 k=130 r=3.0 !!!! top-8 blocks
 [2025-05-10 12:43:40] [CRIT]     Hotel_3, RR: 0.786, mean_RRE: 2.147, mean_RTE: 0.057, median_RRE: 1.840, median_RTE: 0.046
 [2025-05-10 12:43:40] [CRIT]     Study, RR: 0.958, mean_RRE: 2.045, mean_RTE: 0.077, median_RRE: 1.802, median_RTE: 0.061
 [2025-05-10 12:43:40] [CRIT]     MIT_Lab, RR: 0.886, mean_RRE: 2.672, mean_RTE: 0.085, median_RRE: 1.792, median_RTE: 0.064
-"""
 
-"""
-latest SOAR results on 3DLoMatch
+
+latest SOAR results on 3DLoMatch gaussian version
 [2025-05-24 15:25:50] [CRIT]   Coarse Matching, PIR: 0.811, PMR>0: 0.980, PMR>=0.1: 0.970, PMR>=0.3: 0.938, PMR>=0.5: 0.894
 [2025-05-24 15:25:50] [CRIT]     Kitchen, PIR: 0.673, PMR>0: 0.962, PMR>=0.1: 0.926, PMR>=0.3: 0.861, PMR>=0.5: 0.773
 [2025-05-24 15:25:50] [CRIT]     Home_1, PIR: 0.849, PMR>0: 0.990, PMR>=0.1: 0.976, PMR>=0.3: 0.965, PMR>=0.5: 0.945
@@ -464,4 +463,33 @@ latest SOAR results on 3DLoMatch
 [2025-05-24 15:25:50] [CRIT]     Hotel_3, RR: 0.833, mean_RRE: 2.664, mean_RTE: 0.068, median_RRE: 2.179, median_RTE: 0.044
 [2025-05-24 15:25:50] [CRIT]     Study, RR: 0.962, mean_RRE: 2.080, mean_RTE: 0.075, median_RRE: 1.773, median_RTE: 0.061
 [2025-05-24 15:25:50] [CRIT]     MIT_Lab, RR: 0.914, mean_RRE: 2.709, mean_RTE: 0.089, median_RRE: 1.790, median_RTE: 0.062
+
+latest SOAR results on 3DLoMatch latest
+[2025-05-27 01:15:21] [CRIT]   Coarse Matching, PIR: 0.806, PMR>0: 0.982, PMR>=0.1: 0.970, PMR>=0.3: 0.938, PMR>=0.5: 0.893
+[2025-05-27 01:15:21] [CRIT]     Kitchen, PIR: 0.673, PMR>0: 0.966, PMR>=0.1: 0.933, PMR>=0.3: 0.865, PMR>=0.5: 0.766
+[2025-05-27 01:15:21] [CRIT]     Home_1, PIR: 0.845, PMR>0: 0.990, PMR>=0.1: 0.983, PMR>=0.3: 0.965, PMR>=0.5: 0.941
+[2025-05-27 01:15:21] [CRIT]     Home_2, PIR: 0.845, PMR>0: 0.974, PMR>=0.1: 0.970, PMR>=0.3: 0.965, PMR>=0.5: 0.922
+[2025-05-27 01:15:21] [CRIT]     Hotel_1, PIR: 0.889, PMR>0: 1.000, PMR>=0.1: 0.991, PMR>=0.3: 0.986, PMR>=0.5: 0.968
+[2025-05-27 01:15:21] [CRIT]     Hotel_2, PIR: 0.830, PMR>0: 0.975, PMR>=0.1: 0.956, PMR>=0.3: 0.930, PMR>=0.5: 0.911
+[2025-05-27 01:15:21] [CRIT]     Hotel_3, PIR: 0.784, PMR>0: 0.980, PMR>=0.1: 0.980, PMR>=0.3: 0.939, PMR>=0.5: 0.878
+[2025-05-27 01:15:21] [CRIT]     Study, PIR: 0.807, PMR>0: 0.988, PMR>=0.1: 0.979, PMR>=0.3: 0.954, PMR>=0.5: 0.925
+[2025-05-27 01:15:21] [CRIT]     MIT_Lab, PIR: 0.777, PMR>0: 0.986, PMR>=0.1: 0.972, PMR>=0.3: 0.903, PMR>=0.5: 0.833
+[2025-05-27 01:15:21] [CRIT]   Fine Matching, FMR: 0.969, IR: 0.661, OV: 0.908, std: 0.020
+[2025-05-27 01:15:21] [CRIT]     Kitchen, FMR: 0.926, IR: 0.447
+[2025-05-27 01:15:21] [CRIT]     Home_1, FMR: 0.983, IR: 0.714
+[2025-05-27 01:15:21] [CRIT]     Home_2, FMR: 0.974, IR: 0.735
+[2025-05-27 01:15:21] [CRIT]     Hotel_1, FMR: 0.995, IR: 0.750
+[2025-05-27 01:15:21] [CRIT]     Hotel_2, FMR: 0.962, IR: 0.694
+[2025-05-27 01:15:21] [CRIT]     Hotel_3, FMR: 0.959, IR: 0.626
+[2025-05-27 01:15:21] [CRIT]     Study, FMR: 0.971, IR: 0.685
+[2025-05-27 01:15:21] [CRIT]     MIT_Lab, FMR: 0.986, IR: 0.639
+[2025-05-27 01:15:21] [CRIT]   Registration, RR: 0.904, mean_RRE: 2.503, mean_RTE: 0.074, median_RRE: 1.974, median_RTE: 0.056
+[2025-05-27 01:15:21] [CRIT]     Kitchen, RR: 0.815, mean_RRE: 3.681, mean_RTE: 0.086, median_RRE: 3.043, median_RTE: 0.070
+[2025-05-27 01:15:21] [CRIT]     Home_1, RR: 0.940, mean_RRE: 2.122, mean_RTE: 0.070, median_RRE: 1.677, median_RTE: 0.049
+[2025-05-27 01:15:21] [CRIT]     Home_2, RR: 0.860, mean_RRE: 2.684, mean_RTE: 0.069, median_RRE: 2.075, median_RTE: 0.048
+[2025-05-27 01:15:21] [CRIT]     Hotel_1, RR: 0.971, mean_RRE: 1.764, mean_RTE: 0.059, median_RRE: 1.465, median_RTE: 0.045
+[2025-05-27 01:15:21] [CRIT]     Hotel_2, RR: 0.920, mean_RRE: 2.278, mean_RTE: 0.072, median_RRE: 1.898, median_RTE: 0.056
+[2025-05-27 01:15:21] [CRIT]     Hotel_3, RR: 0.857, mean_RRE: 2.748, mean_RTE: 0.070, median_RRE: 2.037, median_RTE: 0.045
+[2025-05-27 01:15:21] [CRIT]     Study, RR: 0.954, mean_RRE: 2.108, mean_RTE: 0.076, median_RRE: 1.788, median_RTE: 0.064
+[2025-05-27 01:15:21] [CRIT]     MIT_Lab, RR: 0.914, mean_RRE: 2.638, mean_RTE: 0.090, median_RRE: 1.811, median_RTE: 0.072
 """

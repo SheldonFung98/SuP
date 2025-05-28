@@ -270,25 +270,36 @@ def evaluate_weights(weights):
     aest_transform = torch.stack(aest_transform)
     success = torch.tensor(success)
 
+    rescale = True
     w0 = weights_all[..., 0]
     w0[w0.isnan()] = 0
     # w0 = w0 - w0.min(dim=1).values[..., None]
     # w0 = w0 / w0.max(dim=1).values[..., None]
     w1 = weights_all[..., 1]
     # w1 -= w1.min(dim=1).values[..., None]
-    w1 /= w1.max(dim=1).values[..., None]
+    if rescale:
+        w1 /= w1.max(dim=1).values[..., None]
     w2 = weights_all[..., 2]
     # w2 = w2 - w2.min(dim=1).values[..., None]
-    w2 = w2 / w2.max(dim=1).values[..., None]
+    if rescale:
+        w2 = w2 / w2.max(dim=1).values[..., None]
     w3 = weights_all[..., 3]
     # w3 = w3 - w3.min(dim=1).values[..., None]
-    w3 = w3 / w3.max(dim=1).values[..., None]
+    if rescale:
+        w3 = w3 / w3.max(dim=1).values[..., None]
     w4 = weights_all[..., 4]
     # w4 = w4 - w4.min(dim=1).values[..., None]
-    w4 = w4 / w4.max(dim=1).values[..., None]
+    if rescale:
+        w4 = w4 / w4.max(dim=1).values[..., None]
 
-    # along dim=0 we have 1726 samples, dim=1 has 24 features
-    x =  0.4 * w1 + w4 + w3  # [1726,24]
+    x = w0 + 0.4 * w1 + w4 + w3  # [1726,24]
+    
+    b = {}
+    for i in range(x.shape[1]):
+        a = accepted.gather(dim=1, index=x.topk(i+1, dim=1).indices)
+        b[i] = a.sum(dim=1).unique(return_counts=True)[1][-i:].sum()/a.shape[0]
+
+
     # x = w2  # [1726,24]
     y = errors        # [1726,24]
     # compute mean & std per column

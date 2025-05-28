@@ -12,6 +12,19 @@ from geotransformer.modules.ops.transformation import apply_transform
 from geotransformer.modules.geotransformer import SuperPointMatching
 from geotransformer.modules.registration import weighted_procrustes
 
+def compute_feature_base_consistency_(
+	ref_points, src_points, 
+	ref_feats, src_feats, 
+	tf_est, radius=0.1, alpha=0.05, top_k=3):
+	r2s_dist = torch.cdist(ref_points, apply_transform(src_points, tf_est))
+	neighbour_inds = (r2s_dist < radius).nonzero()
+	if neighbour_inds.shape[0] == 0:
+		return 0
+	m = torch.einsum("nd,nd->n", ref_feats[neighbour_inds[:, 0]], src_feats[neighbour_inds[:, 1]])
+	# min_llh = torch.exp(-alpha*(((m.topk(top_k,largest=False).values-m.mean())**2)/(2*m.std()**2)))
+	# min_llh *= 1/torch.sqrt(2*3.14*m.std()**2)
+	# return min_llh.mean()
+	return m.mean()
 
 def furthest_point_sample(xyz, npoint):
     """

@@ -200,7 +200,6 @@ class FeatureConsistencyWeighting(nn.Module):
 		
 		# 2) build radius graph (ref → src)
 		dists = torch.cdist(ref_pts.unsqueeze(0).repeat(B,1,1), src_pts_t)  # [N_ref, N_src]
-		# idxs = (dists < self.radius).nonzero(as_tuple=False)  # [E,2]
 		mask = dists < self.radius
 		if not mask.any():
 			# no neighbors → default weights=1
@@ -230,6 +229,238 @@ class FeatureConsistencyWeighting(nn.Module):
 		w = self.node_mlp(max_feats).flatten() # [N]
 		w = torch.sigmoid(w) 
 		return w, sel_tf_ind
+
+
+
+
+
+
+
+
+
+
+class FeatureAlignmentConsistencyWeighting(nn.Module):
+	def __init__(self, radius=0.06, dim_f=256, num_heads=4):
+		super().__init__()
+		self.radius = radius
+		hidden_dim = dim_f // 2
+		self.model_f = MLPBlock(dim_f, out_dim=hidden_dim)
+		self.model_m = MLPBlock(hidden_dim, out_dim=hidden_dim)
+		self.embed_d = DistanceEmbedding(num_freqs=16, dim_f=hidden_dim)
+		self.attn = nn.MultiheadAttention(hidden_dim, num_heads)
+		self.pool = nn.Sequential(
+			nn.Linear(hidden_dim, hidden_dim),
+			nn.GELU()
+		)
+		
+		self.model_w = nn.Sequential(
+			nn.Linear(hidden_dim, 64),
+			nn.GELU(),
+			nn.Linear(64, 1),
+			nn.Sigmoid(),
+		)
+
+	def compute_rmse(self, est_transform, src_points, gt_transform):
+		points = src_points[None, ...].repeat(est_transform.shape[0], 1, 1)
+		realignment_transform = torch.matmul(torch.inverse(gt_transform), est_transform)
+		realigned_src_points_f = apply_transform(points, realignment_transform)
+		rmse = torch.linalg.norm(realigned_src_points_f - points, dim=-1).mean(dim=-1)
+		return rmse
+		
+	def generate_training_tfs(self, src_points, tf_est, tf_gt, acceptance_rmse=0.2):
+		rmses = self.compute_rmse(tf_est, src_points, tf_gt)
+
+		success = rmses < acceptance_rmse
+		failed = ~success
+		reasonable = failed & (rmses < 0.3)
+
+		success_inds = success.nonzero().flatten()
+		failed_inds = failed.nonzero().flatten()
+		reasonable_inds = reasonable.nonzero().flatten()
+
+		sel_ind = torch.cat([
+			torch.randperm(success_inds.shape[0])[:8], 
+			torch.randperm(failed_inds.shape[0])[:8],
+			torch.randperm(reasonable_inds.shape[0])[:8]
+		])
+
+		return tf_est[sel_ind], sel_ind
+
+
+	def forward(self, ref_points, src_points, ref_feats, src_feats, tf_est, tf_gt=None):
+		if self.training:
+			# generate training transforms
+			tf_est, sel_tf_ind = self.generate_training_tfs(src_points, tf_est, tf_gt)
+		B = tf_est.shape[0]
+		# compute transformed source and pairwise distance
+		src_trans = apply_transform(src_points.unsqueeze(0).expand(B, -1, -1), tf_est)
+		d = torch.cdist(ref_points.unsqueeze(0).expand(B, -1, -1), src_trans)
+
+		# mask neighbors
+		mask = d < self.radius
+		if not mask.any():
+			return torch.ones(B, device=d.device)
+
+		# gather indices
+		b_idx, r_idx, s_idx = mask.nonzero(as_tuple=True)
+		# gather and embed
+		rf = self.model_f(ref_feats.unsqueeze(0).expand(B, -1, -1)[b_idx, r_idx])
+		sf = self.model_f(src_feats.unsqueeze(0).expand(B, -1, -1)[b_idx, s_idx])
+		d_emb = self.embed_d(d[b_idx, r_idx, s_idx])
+
+		# combine features
+		diff = rf - sf
+		feats = self.model_m(diff) + d_emb
+
+		# reshape for attention: (N, F) -> (1, N, F) query, key, value
+		feats_t = feats.unsqueeze(1)
+		attn_out, _ = self.attn(feats_t, feats_t, feats_t)
+		attn_out = attn_out.squeeze(1)
+
+		# aggregate per batch via segment soft-attention
+		weights = []
+		for i in range(B):
+			seg = attn_out[b_idx == i]
+			if seg.numel() == 0:
+				# no neighbors
+				weights.append(torch.zeros(self.model_w[0].in_features, device=d.device))
+			else:
+				# attention pooling
+				alpha = torch.softmax(seg.mean(dim=-1, keepdim=True), dim=0)
+				pooled = (alpha * seg).sum(dim=0)
+				weights.append(pooled)
+		stacked = torch.stack(weights, dim=0)
+
+		# predict final weight
+		w = self.model_w(self.pool(stacked)).view(-1)
+		return w, sel_tf_ind if self.training else None
+
+
+class FeatureConsistencyWeighting(nn.Module):
+	def __init__(self, feat_dim=256, hidden_dim=64, radius=0.06):
+		"""
+		feat_dim: dimensionality of per‑point features
+		hidden_dim: hidden size for MLPs
+		radius: neighborhood radius for local edges
+		"""
+		super().__init__()
+		self.radius = radius
+		# MLP on edge features: [f_i, f_j, (x_i - x_j)] → embedding
+		self.edge_mlp = nn.Sequential(
+			nn.Linear(feat_dim*2 + 3, hidden_dim),
+			nn.ReLU(),
+			nn.Linear(hidden_dim, hidden_dim),
+			nn.ReLU()
+		)
+		# MLP on aggregated edge embeddings → scalar weight
+		self.node_mlp = nn.Sequential(
+			nn.Linear(hidden_dim, hidden_dim),
+			nn.ReLU(),
+			nn.Linear(hidden_dim, 1)
+		)
+		self.max_points = 2**13
+
+	def compute_rmse(self, est_transform, src_points, gt_transform):
+		points = src_points[None, ...].repeat(est_transform.shape[0], 1, 1)
+		realignment_transform = torch.matmul(torch.inverse(gt_transform), est_transform)
+		realigned_src_points_f = apply_transform(points, realignment_transform)
+		rmse = torch.linalg.norm(realigned_src_points_f - points, dim=-1).mean(dim=-1)
+		return rmse
+		
+	def generate_training_tfs(self, src_points, tf_est, tf_gt, acceptance_rmse=0.2):
+		rmses = self.compute_rmse(tf_est, src_points, tf_gt)
+
+		success = rmses < acceptance_rmse
+		failed = ~success
+		reasonable = failed & (rmses < 0.3)
+
+		success_inds = success.nonzero().flatten()
+		failed_inds = failed.nonzero().flatten()
+		reasonable_inds = reasonable.nonzero().flatten()
+
+		num = 4
+		sel_ind = torch.cat([
+			torch.randperm(success_inds.shape[0])[:num], 
+			torch.randperm(failed_inds.shape[0])[:num],
+			torch.randperm(reasonable_inds.shape[0])[:num]
+		])
+
+		return tf_est[sel_ind], sel_ind
+	
+	def downsample_pcd_feat(self, points, feats, num_points=1024):
+		"""Downsample point cloud to a fixed number of points."""
+		if points.shape[0] <= num_points:
+			return points, feats
+		# random sample indices
+		indices = torch.randperm(points.shape[0])[:num_points]
+		return points[indices], feats[indices]
+
+	def forward(self, ref_pts, src_pts, ref_feats, src_feats, tf_est, tf_gt=None):
+		sel_tf_ind = None
+		if ref_pts.shape[0] > self.max_points:
+			# downsample points and features
+			ref_pts, ref_feats = self.downsample_pcd_feat(ref_pts, ref_feats, num_points=self.max_points)
+		if src_pts.shape[0] > self.max_points:
+			src_pts, src_feats = self.downsample_pcd_feat(src_pts, src_feats, num_points=self.max_points)
+		if self.training:
+			# generate training transforms
+			tf_est, sel_tf_ind = self.generate_training_tfs(src_pts, tf_est, tf_gt)
+
+		B = tf_est.shape[0]
+		# 1) transform source points
+		src_pts_t = apply_transform(src_pts.unsqueeze(0).repeat(B,1,1), tf_est)  # user‑provided
+		
+		# 2) build radius graph (ref → src)
+		dists = torch.cdist(ref_pts.unsqueeze(0).repeat(B,1,1), src_pts_t)  # [N_ref, N_src]
+		mask = dists < self.radius
+		if not mask.any():
+			# no neighbors → default weights=1
+			return torch.ones(B, device=d.device)
+		b_idx, r_idx, s_idx = mask.nonzero(as_tuple=True)
+
+		if b_idx.numel() == 0:
+			# no neighbors → zero weights
+			return torch.zeros(ref_pts.size(0), device=ref_pts.device)
+ 
+		# remove repetitive
+		rs_idx = r_idx * 10000 + s_idx
+		# Use torch.unique with return_inverse to deduplicate and map back
+		rs_idx_unique, batch2unique_indices = rs_idx.unique(return_inverse=True)
+		# Recover r_idx and s_idx from unique rs_idx
+		r_idx_unique = (rs_idx_unique // 10000).long()
+		s_idx_unique = (rs_idx_unique % 10000).long()
+
+		# 3) form edge inputs
+		f_i = ref_feats[r_idx_unique]                           # [E, F]
+		f_j = src_feats[s_idx_unique]                           # [E, F]
+		# f_sim = torch.einsum("nd,nd->n", f_i, f_j)
+		# f_sim_topk_ind = f_sim.topk(128, largest=False).indices
+		# f_i = f_i[f_sim_topk_ind]
+		# f_j = f_j[f_sim_topk_ind]
+
+		rel = ref_pts[r_idx] - src_pts_t[b_idx, s_idx]   # [E, 3]
+		rel_unique = rel[r_idx_unique]
+		
+		# rel = rel[f_sim_topk_ind]
+		edge_input = torch.cat([f_i, f_j, rel_unique], dim=-1)  # [E, 2F+3]
+
+		# 4) edge embedding
+		e = self.edge_mlp(edge_input)  # [E, H]
+
+		e_reverse = e[batch2unique_indices]  # [E, H], recover original indices
+
+		# 5) aggregate per ref‑point by max
+		chunked = e.split([ (b_idx==i).sum().item() for i in range(B) ])
+		max_feats = torch.stack([
+			c.max(dim=0).values if c.numel()>0 else torch.zeros(e.size(1), device=e.device)
+			for c in chunked
+		])
+		# 6) node weights
+		w = self.node_mlp(max_feats).flatten() # [N]
+		w = torch.sigmoid(w) 
+		return w, sel_tf_ind
+
+
 
 
 
