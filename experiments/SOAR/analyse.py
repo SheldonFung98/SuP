@@ -270,7 +270,7 @@ def evaluate_weights(weights):
     aest_transform = torch.stack(aest_transform)
     success = torch.tensor(success)
 
-    rescale = True
+    rescale = False
     w0 = weights_all[..., 0]
     w0[w0.isnan()] = 0
     # w0 = w0 - w0.min(dim=1).values[..., None]

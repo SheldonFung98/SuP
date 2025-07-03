@@ -89,7 +89,7 @@ class ThreeDMatchPairDataset(torch.utils.data.Dataset):
         return ref_points, src_points, rotation, translation
 
     def __getitem__(self, index):
-        # index = 1629
+        # index = 920
         data_dict = {}
 
         # metadata

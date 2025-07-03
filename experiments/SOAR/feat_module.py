@@ -422,32 +422,16 @@ class FeatureConsistencyWeighting(nn.Module):
 			# no neighbors → zero weights
 			return torch.zeros(ref_pts.size(0), device=ref_pts.device)
  
-		# remove repetitive
-		rs_idx = r_idx * 10000 + s_idx
-		# Use torch.unique with return_inverse to deduplicate and map back
-		rs_idx_unique, batch2unique_indices = rs_idx.unique(return_inverse=True)
-		# Recover r_idx and s_idx from unique rs_idx
-		r_idx_unique = (rs_idx_unique // 10000).long()
-		s_idx_unique = (rs_idx_unique % 10000).long()
-
 		# 3) form edge inputs
-		f_i = ref_feats[r_idx_unique]                           # [E, F]
-		f_j = src_feats[s_idx_unique]                           # [E, F]
-		# f_sim = torch.einsum("nd,nd->n", f_i, f_j)
-		# f_sim_topk_ind = f_sim.topk(128, largest=False).indices
-		# f_i = f_i[f_sim_topk_ind]
-		# f_j = f_j[f_sim_topk_ind]
+		f_i = ref_feats[r_idx]                           # [E, F]
+		f_j = src_feats[s_idx]                           # [E, F]
 
 		rel = ref_pts[r_idx] - src_pts_t[b_idx, s_idx]   # [E, 3]
-		rel_unique = rel[r_idx_unique]
 		
-		# rel = rel[f_sim_topk_ind]
-		edge_input = torch.cat([f_i, f_j, rel_unique], dim=-1)  # [E, 2F+3]
+		edge_input = torch.cat([f_i, f_j, rel], dim=-1)  # [E, 2F+3]
 
 		# 4) edge embedding
 		e = self.edge_mlp(edge_input)  # [E, H]
-
-		e_reverse = e[batch2unique_indices]  # [E, H], recover original indices
 
 		# 5) aggregate per ref‑point by max
 		chunked = e.split([ (b_idx==i).sum().item() for i in range(B) ])

@@ -11,6 +11,10 @@ import torch.nn.functional as F
 from geotransformer.modules.ops.transformation import apply_transform
 from geotransformer.modules.geotransformer import SuperPointMatching
 from geotransformer.modules.registration import weighted_procrustes
+try:
+	from pointscope import PointScopeClient as PSC
+except ImportError:
+	pass
 
 def compute_feature_base_consistency_(
 	ref_points, src_points, 
@@ -235,7 +239,8 @@ class PartialRegistrationGenerator(torch.nn.Module):
 	def forward(self, ref_points, src_points, ref_feats, src_feats, aux=None):
 		# Debug
 		with torch.no_grad():
-			failed_ind = [1, 8, 36, 39, 44, 49, 53, 56, 63, 80, 89, 97]
+			failed_ind = [36, 45, 51] # 3DMatch
+			# failed_ind = [1, 8, 36, 39, 44, 49, 53, 56, 63, 80, 89, 97]
 						#[1, 8, 24, 39, 44, 53, 56, 61, 63, 74, 80, 86, 89,
 			# AUX data
 			gt_tf, index = aux
@@ -324,7 +329,7 @@ class PartialRegistrationGenerator(torch.nn.Module):
 
 		# Visualize top-k pairs
 		view_num = 9
-		view_inds = corr_weights.topk(k=view_num, dim=0, largest=True).indices
+		view_inds = corr_scores.topk(k=view_num, dim=0, largest=True).indices
 		scores = corr_scores[view_inds]
 		c = torch.zeros(*scores.shape, 3)
 		c[:, :, 0] = (scores/scores.max(dim=1).values[:, None]).clamp(min=0, max=1)

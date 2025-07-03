@@ -210,10 +210,10 @@ class BaseTrainer(abc.ABC):
             for name, param in self.model.named_parameters():
                 if name in snapshot_keys:
                     param.requires_grad = False
-                    freezed_modules.append(name.split('.')[0])
+                    freezed_modules.append(name.split('.')[1 if self.distributed else 0])
                 else:
                     param.requires_grad = True
-                    non_freezed_modules.append(name.split('.')[0])
+                    non_freezed_modules.append(name.split('.')[1 if self.distributed else 0])
             freezed_modules = set(freezed_modules)
             non_freezed_modules = set(non_freezed_modules)
             message = f'Freezed modules: {freezed_modules}'

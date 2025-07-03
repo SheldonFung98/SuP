@@ -29,6 +29,7 @@ from geotransformer.modules.ops.transformation import apply_transform
 
 # from feat_module import FeatureAlignmentConsistencyWeighting, FeatureConsistencyWeighting
 from fcw_module import FeatureConsistencyWeighting
+# from feat_module import FeatureConsistencyWeighting
 from geotransformer.modules.registration import weighted_procrustes
 
 
@@ -83,7 +84,8 @@ class GeoTransformer(nn.Module):
 
 		self.optimal_transport = LearnableLogOptimalTransport(cfg.model.num_sinkhorn_iterations)
 
-		self.prg = utils.PartialRegistrationGenerator()
+		self.prg = utils.PartialRegistrationGenerator(pair_num=24, anchor_num=6)
+		# self.prg = utils.PartialRegistrationGenerator(pair_num=16, anchor_num=6)
 		self.facw = FeatureConsistencyWeighting()
 
 	def blockwise_transform_est(self, 
@@ -181,9 +183,11 @@ class GeoTransformer(nn.Module):
 		batch_size = ref_node_corr_indices.shape[0]
 		corr_indices_stack = torch.stack([ref_node_corr_indices.view(-1), src_node_corr_indices.view(-1)]).T
 		corr_indices_cat = (corr_indices_stack[:, 0] * 1000 + corr_indices_stack[:, 1])
-		corr_indices_cat_unique = corr_indices_cat.unique()
-		batch2unique_indices = (corr_indices_cat_unique[None, :].eq(corr_indices_cat[:, None])).nonzero(as_tuple=True)[1]
+		# corr_indices_cat_unique = corr_indices_cat.unique()
+		corr_indices_cat_unique, batch2unique_indices = corr_indices_cat.unique(return_inverse=True)
 		batch2unique_indices = batch2unique_indices.view(batch_size, -1)
+		# batch2unique_indices = (corr_indices_cat_unique[None, :].eq(corr_indices_cat[:, None])).nonzero(as_tuple=True)[1]
+		# batch2unique_indices = batch2unique_indices.view(batch_size, -1)
 
 		corr_indices_unique_stack = torch.stack([corr_indices_cat_unique // 1000, corr_indices_cat_unique % 1000], dim=1)
 		ref_node_corr_indices_unique = corr_indices_unique_stack[:, 0]
@@ -382,23 +386,30 @@ class GeoTransformer(nn.Module):
 			weights[i, 0] = ov_weights[i]
 			corr_weight = (apply_transform(src_corr_points, estimated_transform) - ref_corr_points).square().sum(dim=1).sqrt().mean()
 			weights[i, 1] = torch.exp(-2*corr_weight)
-			wfbs_m = utils.compute_feature_base_consistency_(
-				ref_points_m,
-				src_points_m,
-				ref_feats_m,
-				src_feats_m,
-				estimated_transform,
-				radius=0.06, alpha=0.08, top_k=1
-			)
-			weights[i, 3] = 0 if isinstance(wfbs_m, int) else wfbs_m.float()
-		
+			# wfbs_m = utils.compute_feature_base_consistency_(
+			# 	ref_points_m,
+			# 	src_points_m,
+			# 	ref_feats_m,
+			# 	src_feats_m,
+			# 	estimated_transform,
+			# 	radius=0.06, alpha=0.08, top_k=1
+			# )
+			# weights[i, 3] = 0 if isinstance(wfbs_m, int) else wfbs_m.float()
 		w_facw, sel_tf_ind = self.facw(
-			ref_points_m, ref_points_f,
-			src_points_m, src_points_f,
+			ref_points_c, ref_points_m, ref_points_f,
+			src_points_c, src_points_m, src_points_f,
 			ref_feats_m, ref_feats_f,
 			src_feats_m, src_feats_f,
 			Ts, tf_gt=transform if self.training else None,
 		)
+		# w_facw, sel_tf_ind = self.facw(
+		# 	ref_points_f, 
+		# 	src_points_f,
+		# 	ref_feats_f,
+		# 	src_feats_f,
+		# 	Ts,
+		# 	tf_gt=transform if self.training else None,
+		# )
 		if self.training:
 			weights = weights[sel_tf_ind]
 			Ts = Ts[sel_tf_ind]
@@ -406,24 +417,11 @@ class GeoTransformer(nn.Module):
 		weights[:, 4] = w_facw
 		output_dict['w_facw'] = w_facw
 		output_dict['all_weights'] = weights
-		# w1 = weights[:, 1]
-		# w1 = w1 / w1.max()
-		# w3 = weights[:, 3]
-		# w3 = w3 / w3.max()
-		# w4 = weights[:, 4]
-		# w4 = w4 / w4.max()
-		# merged_weights = weights[:, 0] * weights[:, 1] * weights[:, 2] * weights[:, 3] * weights[:, 4]
-		# merged_weights = 0.4 * w1 + w3 + w4
-		# merged_weights = 0.4 * w1 + w3 + w4
-		# with torch.no_grad():
-		# 	# merged_weights = w_facw * Ts_weights * ov_weights
-		# 	# merged_weights = w_facw * weights[:, 0] * weights[:, 1] * weights[:, 3] * weights[:, 4]
-		# 	# merged_weights = w_facw * weights[:, 3] * weights[:, 4]
-		# 	pass
 		w3 = weights[:, 3]
 		w3 = w3 / w3.max()
 		with torch.no_grad():
-			merged_weights = 0.4 * weights[:, 1] + weights[:, 4] + w3
+			merged_weights = weights[:, 1] + 1.2 * weights[:, 4]
+			# merged_weights = weights[:, 1] + 0.4 * weights[:, 4]
 
 		merged_weights[merged_weights.isnan()] = 0
 		sel_weights, sel_ind = merged_weights.view(-1).topk(3)
@@ -493,6 +491,15 @@ class GeoTransformer(nn.Module):
 			# psc = PSC().vedo().add_pcd(ref_points_f).add_pcd(src_points_f, T).add_pcd(src_points_f, transform).show()
 		if True and not torch.stack([compute_recall(tf, transform, src_points_f, 0.2) for tf in Ts]).any():
 			pass
+
+		if False:
+			psc = PSC().vedo(subplot=Ts.shape[0])
+			for ind, t in enumerate(Ts):
+				psc.draw_at(ind)
+				text = f'{w_facw[ind].cpu().item():.2f}'
+				psc.add_pcd(ref_points_f).add_pcd(src_points_f, t).hint(text)
+			psc.show()
+			
 
 		if False:
 			psc = PSC().vedo().add_pcd(ref_points_f)
