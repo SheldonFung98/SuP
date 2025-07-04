@@ -170,63 +170,63 @@ import torch.nn.functional as F
 
 # VLAD operation
 class NetVLAD(nn.Module):
-    """NetVLAD layer implementation"""
+	"""NetVLAD layer implementation"""
 
-    def __init__(self, num_clusters=8, dim=32, alpha=1.0,
-                 normalize_input=True):
-        """
-        Args:
-            num_clusters : int
-                The number of clusters
-            dim : int
-                Dimension of descriptors
-            alpha : float
-                Parameter of initialization. Larger value is harder assignment.
-            normalize_input : bool
-                If true, descriptor-wise L2 normalization is applied to input.
-        """
-        super().__init__()
-        self.num_clusters = num_clusters
-        self.dim = dim
-        self.alpha = alpha
-        self.normalize_input = normalize_input
-        self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
-        self.centroids = nn.Parameter(torch.rand(num_clusters, dim))
-        self._init_params()
+	def __init__(self, num_clusters=8, dim=32, alpha=1.0,
+				 normalize_input=True):
+		"""
+		Args:
+			num_clusters : int
+				The number of clusters
+			dim : int
+				Dimension of descriptors
+			alpha : float
+				Parameter of initialization. Larger value is harder assignment.
+			normalize_input : bool
+				If true, descriptor-wise L2 normalization is applied to input.
+		"""
+		super().__init__()
+		self.num_clusters = num_clusters
+		self.dim = dim
+		self.alpha = alpha
+		self.normalize_input = normalize_input
+		self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
+		self.centroids = nn.Parameter(torch.rand(num_clusters, dim))
+		self._init_params()
 
-    def _init_params(self):
-        self.conv.weight = nn.Parameter(
-            (2.0 * self.alpha * self.centroids).unsqueeze(-1).unsqueeze(-1)
-        )
-        self.conv.bias = nn.Parameter(
-            - self.alpha * self.centroids.norm(dim=1)
-        )
+	def _init_params(self):
+		self.conv.weight = nn.Parameter(
+			(2.0 * self.alpha * self.centroids).unsqueeze(-1).unsqueeze(-1)
+		)
+		self.conv.bias = nn.Parameter(
+			- self.alpha * self.centroids.norm(dim=1)
+		)
 
-    def forward(self, x):
-        # x:n*f
-        x = x.T[None,:,:,None]
-        N, C = x.shape[:2]
+	def forward(self, x):
+		# x:n*f
+		x = x.T[None,:,:,None]
+		N, C = x.shape[:2]
 
-        if self.normalize_input:
-            x = F.normalize(x, p=2, dim=1)  # across descriptor dim
+		if self.normalize_input:
+			x = F.normalize(x, p=2, dim=1)  # across descriptor dim
 
-        # soft-assignment
-        soft_assign = self.conv(x).view(N, self.num_clusters, -1)
-        soft_assign = F.softmax(soft_assign, dim=1)
+		# soft-assignment
+		soft_assign = self.conv(x).view(N, self.num_clusters, -1)
+		soft_assign = F.softmax(soft_assign, dim=1)
 
-        x_flatten = x.view(N, C, -1)
-        
-        # calculate residuals to each clusters
-        residual = x_flatten.expand(self.num_clusters, -1, -1, -1).permute(1, 0, 2, 3) - \
-            self.centroids.expand(x_flatten.size(-1), -1, -1).permute(1, 2, 0).unsqueeze(0)
-        residual *= soft_assign.unsqueeze(2)
-        vlad = residual.sum(dim=-1)
+		x_flatten = x.view(N, C, -1)
+		
+		# calculate residuals to each clusters
+		residual = x_flatten.expand(self.num_clusters, -1, -1, -1).permute(1, 0, 2, 3) - \
+			self.centroids.expand(x_flatten.size(-1), -1, -1).permute(1, 2, 0).unsqueeze(0)
+		residual *= soft_assign.unsqueeze(2)
+		vlad = residual.sum(dim=-1)
 
-        vlad = F.normalize(vlad, p=2, dim=2)  # intra-normalization
-        vlad = vlad.view(x.size(0), -1)  # flatten
-        # 1*of
-        return vlad
-    
+		vlad = F.normalize(vlad, p=2, dim=2)  # intra-normalization
+		vlad = vlad.view(x.size(0), -1)  # flatten
+		# 1*of
+		return vlad
+	
 
 class FeatureConsistencyWeighting(nn.Module):
 	def __init__(self, feat_dim=256, hidden_dim=32, radius=0.1):
@@ -382,14 +382,80 @@ class FeatureConsistencyWeighting(nn.Module):
 #######################################################################################################################################
 #######################################################################################################################################
 
+# Sinusoidal positional encoding for 1-d distance to 128-d embedding
+class SinusoidalDistanceEmbedding(nn.Module):
+	def __init__(self, emb_dim=128):
+		super().__init__()
+		self.emb_dim = emb_dim
+		div_term = torch.exp(torch.arange(0, emb_dim, 2, dtype=torch.float32) * (-torch.log(torch.tensor(10000.0)) / emb_dim))
+		self.register_buffer('div_term', div_term)
+
+	def forward(self, x):
+		# x: [N, 1] or [N]
+		x = x.view(-1, 1).float()
+		pe = torch.zeros(x.size(0), self.emb_dim, device=x.device)
+		pe[:, 0::2] = torch.sin(x * self.div_term)
+		pe[:, 1::2] = torch.cos(x * self.div_term)
+		return pe
+
 class WeightingNet(nn.Module):
 
-	def __init__(self):
+	def __init__(self, num_clusters=8, dim=128, alpha=1.0,
+				 normalize_input=True):
+		"""
+		Args:
+			num_clusters : int
+				The number of clusters
+			dim : int
+				Dimension of descriptors
+			alpha : float
+				Parameter of initialization. Larger value is harder assignment.
+			normalize_input : bool
+				If true, descriptor-wise L2 normalization is applied to input.
+		"""
 		super().__init__()
-		self.attn = nn.MultiheadAttention(embed_dim=256, num_heads=4, batch_first=True)
-	
+		self.num_clusters = num_clusters
+		self.dim = dim
+		self.alpha = alpha
+		self.normalize_input = normalize_input
+		self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
+		self.centroids = nn.Parameter(torch.rand(num_clusters, dim))
+
+		self._init_params()
+
+	def _init_params(self):
+		self.conv.weight = nn.Parameter(
+			(2.0 * self.alpha * self.centroids).unsqueeze(-1).unsqueeze(-1)
+		)
+		self.conv.bias = nn.Parameter(
+			- self.alpha * self.centroids.norm(dim=1)
+		)
+
 	def forward(self, x):
-		pass
+
+		# x:n*f
+		x = x.T[None,:,:,None]
+		N, C = x.shape[:2]
+
+		if self.normalize_input:
+			x = F.normalize(x, p=2, dim=1)  # across descriptor dim
+
+		# soft-assignment
+		soft_assign = self.conv(x).view(N, self.num_clusters, -1)
+		soft_assign = F.softmax(soft_assign, dim=1)
+
+		x_flatten = x.view(N, C, -1)
+		
+		# calculate residuals to each clusters
+		residual = x_flatten.expand(self.num_clusters, -1, -1, -1).permute(1, 0, 2, 3) - \
+			self.centroids.expand(x_flatten.size(-1), -1, -1).permute(1, 2, 0).unsqueeze(0)
+		residual *= soft_assign.unsqueeze(2)
+		vlad = residual.sum(dim=-1)
+
+		vlad = F.normalize(vlad, p=2, dim=2)  # intra-normalization
+		vlad = vlad.view(x.size(0), -1)  # flatten
+		# 1*of
+		return vlad
 
 
 class FeatureConsistencyWeighting(nn.Module):
@@ -402,7 +468,22 @@ class FeatureConsistencyWeighting(nn.Module):
 		super().__init__()
 		self.radius = radius
 		self.max_points = 2**13
-		# self.net = NetVLAD()
+		self.wnet = WeightingNet()
+		self.mlp_coarse = nn.Sequential(
+			nn.Linear(512, 64),
+			nn.ReLU()
+		)
+		self.mlp_fine = nn.Sequential(
+			nn.Linear(256, 64),
+			nn.ReLU()
+		)
+
+		self.dist_emb = SinusoidalDistanceEmbedding(emb_dim=128)
+
+		self.proj = nn.Sequential(
+			nn.Linear(1024, 1),
+			nn.Sigmoid()
+		)
 
 	def compute_rmse(self, est_transform, src_points, gt_transform):
 		points = src_points[None, ...].repeat(est_transform.shape[0], 1, 1)
@@ -491,50 +572,6 @@ class FeatureConsistencyWeighting(nn.Module):
 			tf_est, sel_tf_ind = self.generate_training_tfs(src_pts_f, tf_est, tf_gt)
 
 		B = tf_est.shape[0]
-		# 1) transform source points
-		# src_pts_c_t = apply_transform(src_pts_c.unsqueeze(0).repeat(B,1,1), tf_est)  # user‑provided
-		
-		# # 2) build radius graph (ref → src)
-		# dists = torch.cdist(ref_pts_c.unsqueeze(0).repeat(B,1,1), src_pts_c_t)  # [N_ref, N_src]
-		# mask = dists < self.radius
-		# if not mask.any():
-		# 	# no neighbors → default weights=1
-		# 	return torch.ones(B, device=d.device)
-		# b_idx, r_idx, s_idx = mask.nonzero(as_tuple=True)
-
-		# if b_idx.numel() == 0:
-		# 	# no neighbors → zero weights
-		# 	return torch.zeros(ref_pts_m.size(0), device=ref_pts_m.device)
-
-		# split_sizes = [ (b_idx==i).sum().item() for i in range(B) ]
-
-
-		# ref_cf_knn_ind = torch.cdist(ref_pts_c, ref_pts_f).topk(1, dim=1, largest=False).indices.flatten()
-		# src_cf_knn_ind = torch.cdist(src_pts_c, src_pts_f).topk(1, dim=1, largest=False).indices.flatten()
-		# ref_feats_f_sel = ref_feats_f[ref_cf_knn_ind[r_idx]]
-		# src_feats_f_sel = src_feats_f[src_cf_knn_ind[s_idx]]
-		# m = torch.einsum("nd,nd->n", ref_feats_f_sel, src_feats_f_sel)
-
-		# dists = torch.cdist(ref_pts_f, apply_transform(src_pts_f[None, ...], tf_est))  # [N_ref, N_src]
-		# mask = dists < self.radius
-		# if not mask.any():
-		# 	# no neighbors → default weights=1
-		# 	return torch.ones(B, device=d.device)
-		# b_idx, r_idx, s_idx = mask.nonzero(as_tuple=True)
-		# if b_idx.numel() == 0:
-		# 	# no neighbors → zero weights
-		# 	return torch.zeros(ref_pts_f.size(0), device=ref_pts_f.device)
-		# split_sizes = [ (b_idx==i).sum().item() for i in range(B) ]
-		# m = torch.einsum("nd,nd->n", ref_feats_f[r_idx], src_feats_f[s_idx])
-		# w_f = self.get_weight(m, split_sizes, k=256)
-
-		# ref_cm_knn_ind = torch.cdist(ref_pts_c, ref_pts_m).topk(1, dim=1, largest=False).indices.flatten()
-		# src_cm_knn_ind = torch.cdist(src_pts_c, src_pts_m).topk(1, dim=1, largest=False).indices.flatten()
-		# ref_feats_m_sel = ref_feats_m[ref_cm_knn_ind[r_idx]]
-		# src_feats_m_sel = src_feats_m[src_cm_knn_ind[s_idx]]
-		# m = torch.einsum("nd,nd->n", ref_feats_m_sel, src_feats_m_sel)
-
-
 		ref_mf_knn_ind = torch.cdist(ref_pts_m, ref_pts_f).topk(1, dim=1, largest=False).indices.flatten()
 		src_mf_knn_ind = torch.cdist(src_pts_m, src_pts_f).topk(1, dim=1, largest=False).indices.flatten()
 		ref_feats_f_sel = ref_feats_f[ref_mf_knn_ind]
@@ -544,19 +581,34 @@ class FeatureConsistencyWeighting(nn.Module):
 		mask = dists < self.radius
 		if not mask.any():
 			# no neighbors → default weights=1
-			return torch.ones(B, device=d.device)
+			return torch.ones(B, device=ref_pts_m.device), sel_tf_ind
 		b_idx, r_idx, s_idx = mask.nonzero(as_tuple=True)
 		if b_idx.numel() == 0:
 			# no neighbors → zero weights
-			return torch.zeros(ref_pts_m.size(0), device=ref_pts_m.device)
+			return torch.ones(ref_pts_m.size(0), device=ref_pts_m.device), sel_tf_ind
 		split_sizes = [ (b_idx==i).sum().item() for i in range(B) ]
 
-		m = torch.einsum("nd,nd->n", ref_feats_m[r_idx], src_feats_m[s_idx])
-		w_m = self.get_weight(m, split_sizes, k=256)
 
-		m = torch.einsum("nd,nd->n", ref_feats_f_sel[r_idx], src_feats_f_sel[s_idx])
-		w_f = self.get_weight(m, split_sizes, k=256)
-		# w = (w_f + w_m) / 2  # average weights from feature and consistency
-		w = w_f + w_m
+
+		ref_fm = self.mlp_coarse(ref_feats_m)
+		src_fm = self.mlp_coarse(src_feats_m)
+		ref_ff = self.mlp_fine(ref_feats_f_sel)
+		src_ff = self.mlp_fine(src_feats_f_sel)
+		ref_f = torch.cat([ref_fm, ref_ff], dim=-1)[r_idx]
+		src_f = torch.cat([src_fm, src_ff], dim=-1)[s_idx]
+		d = self.dist_emb(dists[b_idx, r_idx, s_idx])
+
+		feat_diff = ref_f - src_f + d
+		o = torch.cat([self.wnet(x) for x in feat_diff.split(split_sizes)], dim=0)  # [N, 1]
+		w = self.proj(o).flatten()
+
+		# k = 256
+		# m = torch.einsum("nd,nd->n", ref_feats_m[r_idx], src_feats_m[s_idx])
+		# w_m = self.get_weight(m, split_sizes, k=k)
+
+		# m = torch.einsum("nd,nd->n", ref_feats_f_sel[r_idx], src_feats_f_sel[s_idx])
+		# w_f = self.get_weight(m, split_sizes, k=k)
+		# # w = (w_f + w_m) / 2  # average weights from feature and consistency
+		# w = w_f + w_m
 		return w, sel_tf_ind
 
