@@ -433,6 +433,9 @@ class WeightingNet(nn.Module):
 
 	def forward(self, x):
 
+		if x.shape[0] == 0:
+			# no points → return empty tensor
+			return None
 		# x:n*f
 		x = x.T[None,:,:,None]
 		N, C = x.shape[:2]
@@ -481,7 +484,9 @@ class FeatureConsistencyWeighting(nn.Module):
 		self.dist_emb = SinusoidalDistanceEmbedding(emb_dim=128)
 
 		self.proj = nn.Sequential(
-			nn.Linear(1024, 1),
+			nn.Linear(1024, 256),
+			nn.ReLU(),
+			nn.Linear(256, 1),
 			nn.Sigmoid()
 		)
 
@@ -588,8 +593,6 @@ class FeatureConsistencyWeighting(nn.Module):
 			return torch.ones(ref_pts_m.size(0), device=ref_pts_m.device), sel_tf_ind
 		split_sizes = [ (b_idx==i).sum().item() for i in range(B) ]
 
-
-
 		ref_fm = self.mlp_coarse(ref_feats_m)
 		src_fm = self.mlp_coarse(src_feats_m)
 		ref_ff = self.mlp_fine(ref_feats_f_sel)
@@ -599,8 +602,12 @@ class FeatureConsistencyWeighting(nn.Module):
 		d = self.dist_emb(dists[b_idx, r_idx, s_idx])
 
 		feat_diff = ref_f - src_f + d
-		o = torch.cat([self.wnet(x) for x in feat_diff.split(split_sizes)], dim=0)  # [N, 1]
-		w = self.proj(o).flatten()
+		outputs = [self.wnet(x) for x in feat_diff.split(split_sizes)]
+		valid_ind, valid_outputs = zip(*[(i, out) for i, out in enumerate(outputs) if out is not None])
+		valid_outputs = torch.cat(valid_outputs)
+		w = torch.zeros(B, device=ref_pts_m.device)
+
+		w[[valid_ind]] = self.proj(valid_outputs).flatten()
 
 		# k = 256
 		# m = torch.einsum("nd,nd->n", ref_feats_m[r_idx], src_feats_m[s_idx])
