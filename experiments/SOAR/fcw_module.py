@@ -398,11 +398,12 @@ class SinusoidalDistanceEmbedding(nn.Module):
 		pe[:, 1::2] = torch.cos(x * self.div_term)
 		return pe
 
+
 class WeightingNet(nn.Module):
 
-	def __init__(self, num_clusters=8, dim=128, alpha=1.0,
-				 normalize_input=True):
-		"""
+	def __init__(self, num_clusters=128, dim=256, alpha=1.0,
+				 normalize_input=False):
+		""" 
 		Args:
 			num_clusters : int
 				The number of clusters
@@ -419,46 +420,33 @@ class WeightingNet(nn.Module):
 		self.alpha = alpha
 		self.normalize_input = normalize_input
 		self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
-		self.centroids = nn.Parameter(torch.rand(num_clusters, dim))
+		# self.centroids = nn.Parameter(torch.rand(num_clusters, dim))
 
-		self._init_params()
+	# 	self._init_params()
 
-	def _init_params(self):
-		self.conv.weight = nn.Parameter(
-			(2.0 * self.alpha * self.centroids).unsqueeze(-1).unsqueeze(-1)
-		)
-		self.conv.bias = nn.Parameter(
-			- self.alpha * self.centroids.norm(dim=1)
-		)
+	# def _init_params(self):
+	# 	self.conv.weight = nn.Parameter(
+	# 		(2.0 * self.alpha * self.centroids).unsqueeze(-1).unsqueeze(-1)
+	# 	)
+	# 	self.conv.bias = nn.Parameter(
+	# 		- self.alpha * self.centroids.norm(dim=1)
+	# 	)
 
-	def forward(self, x):
+	def forward(self, ref_feat, src_feat):
 
-		if x.shape[0] == 0:
+		if ref_feat.shape[0] == 0 or src_feat.shape[0] == 0:
 			# no points → return empty tensor
 			return None
-		# x:n*f
-		x = x.T[None,:,:,None]
-		N, C = x.shape[:2]
 
-		if self.normalize_input:
-			x = F.normalize(x, p=2, dim=1)  # across descriptor dim
+		ref_feat = ref_feat.T[None,:,:,None]
+		src_feat = src_feat.T[None,:,:,None]
+		N, C, N = ref_feat.shape[:-1]
+		ref_feat_c = self.conv(ref_feat).view(N, self.num_clusters, -1)
+		src_feat_c = self.conv(src_feat).view(N, self.num_clusters, -1)
 
-		# soft-assignment
-		soft_assign = self.conv(x).view(N, self.num_clusters, -1)
-		soft_assign = F.softmax(soft_assign, dim=1)
+		m = torch.einsum("ncb,ncb->bc", ref_feat_c, src_feat_c) / N
 
-		x_flatten = x.view(N, C, -1)
-		
-		# calculate residuals to each clusters
-		residual = x_flatten.expand(self.num_clusters, -1, -1, -1).permute(1, 0, 2, 3) - \
-			self.centroids.expand(x_flatten.size(-1), -1, -1).permute(1, 2, 0).unsqueeze(0)
-		residual *= soft_assign.unsqueeze(2)
-		vlad = residual.sum(dim=-1)
-
-		vlad = F.normalize(vlad, p=2, dim=2)  # intra-normalization
-		vlad = vlad.view(x.size(0), -1)  # flatten
-		# 1*of
-		return vlad
+		return m
 
 
 class FeatureConsistencyWeighting(nn.Module):
@@ -473,20 +461,22 @@ class FeatureConsistencyWeighting(nn.Module):
 		self.max_points = 2**13
 		self.wnet = WeightingNet()
 		self.mlp_coarse = nn.Sequential(
-			nn.Linear(512, 64),
+			nn.Linear(512, 128),
 			nn.ReLU()
 		)
 		self.mlp_fine = nn.Sequential(
-			nn.Linear(256, 64),
+			nn.Linear(256, 128),
 			nn.ReLU()
 		)
 
 		self.dist_emb = SinusoidalDistanceEmbedding(emb_dim=128)
 
 		self.proj = nn.Sequential(
-			nn.Linear(1024, 256),
-			nn.ReLU(),
-			nn.Linear(256, 1),
+			nn.Linear(128, 64),
+			nn.PReLU(),
+			nn.Linear(64, 32),
+			nn.PReLU(),
+			nn.Linear(32, 1),
 			nn.Sigmoid()
 		)
 
@@ -599,10 +589,10 @@ class FeatureConsistencyWeighting(nn.Module):
 		src_ff = self.mlp_fine(src_feats_f_sel)
 		ref_f = torch.cat([ref_fm, ref_ff], dim=-1)[r_idx]
 		src_f = torch.cat([src_fm, src_ff], dim=-1)[s_idx]
-		d = self.dist_emb(dists[b_idx, r_idx, s_idx])
+		# d = self.dist_emb(dists[b_idx, r_idx, s_idx])
 
-		feat_diff = ref_f - src_f + d
-		outputs = [self.wnet(x) for x in feat_diff.split(split_sizes)]
+		# feat_diff = ref_f - src_f
+		outputs = [self.wnet(rf, sf) for rf, sf in zip(ref_f.split(split_sizes), src_f.split(split_sizes))]
 		valid_ind, valid_outputs = zip(*[(i, out) for i, out in enumerate(outputs) if out is not None])
 		valid_outputs = torch.cat(valid_outputs)
 		w = torch.zeros(B, device=ref_pts_m.device)
