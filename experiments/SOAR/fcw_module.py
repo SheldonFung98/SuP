@@ -6,51 +6,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class WeightingNet(nn.Module):
-
-	def __init__(self, num_clusters=768, dim=768):
-		super().__init__()
-		self.num_clusters = num_clusters
-		self.dim = dim
-		self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
-
-		self.proj = nn.Sequential(
-			nn.Linear(dim, 64),
-			nn.PReLU(),
-		)
-
-	def forward(self, ref_feat, src_feat):
-
-		if ref_feat.shape[0] == 0 or src_feat.shape[0] == 0:
-			# no points → return empty tensor
-			return None
-		N, C = ref_feat.shape
-		prior = ref_feat * src_feat
-		post = self.conv(prior.T[None, :, :, None]).view(N, self.num_clusters, -1).squeeze(-1)
-		o = prior + post
-		out = self.proj(o)
-		return out.sum(dim=0, keepdim=True)
-
 # class WeightingNet(nn.Module):
 
-# 	def __init__(self, num_clusters=768, dim=768, alpha=1.0,
-# 				 normalize_input=False):
-# 		""" 
-# 		Args:
-# 			num_clusters : int
-# 				The number of clusters
-# 			dim : int
-# 				Dimension of descriptors
-# 			alpha : float
-# 				Parameter of initialization. Larger value is harder assignment.
-# 			normalize_input : bool
-# 				If true, descriptor-wise L2 normalization is applied to input.
-# 		"""
+# 	def __init__(self, num_clusters=768, dim=768):
 # 		super().__init__()
 # 		self.num_clusters = num_clusters
 # 		self.dim = dim
-# 		self.alpha = alpha
-# 		self.normalize_input = normalize_input
 # 		self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
 
 # 		self.proj = nn.Sequential(
@@ -63,20 +24,39 @@ class WeightingNet(nn.Module):
 # 		if ref_feat.shape[0] == 0 or src_feat.shape[0] == 0:
 # 			# no points → return empty tensor
 # 			return None
-
+# 		N, C = ref_feat.shape
 # 		prior = ref_feat * src_feat
-
-# 		ref_feat = ref_feat.T[None,:,:,None]
-# 		src_feat = src_feat.T[None,:,:,None]
-# 		N, C, N = ref_feat.shape[:-1]
-# 		ref_feat_c = self.conv(ref_feat).view(N, self.num_clusters, -1)
-# 		src_feat_c = self.conv(src_feat).view(N, self.num_clusters, -1)
-
-# 		post = (ref_feat_c * src_feat_c).squeeze(-1)
-
+# 		post = self.conv(prior.T[None, :, :, None]).view(N, self.num_clusters, -1).squeeze(-1)
 # 		o = prior + post
 # 		out = self.proj(o)
 # 		return out.max(dim=0, keepdim=True).values
+
+class WeightingNet(nn.Module):
+
+	def __init__(self, num_clusters=768, dim=768):
+		super().__init__()
+		self.num_clusters = num_clusters
+		self.dim = dim
+		# self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
+		self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=8, batch_first=True)
+
+		self.proj = nn.Sequential(
+			nn.Linear(dim, 64),
+			nn.PReLU(),
+		)
+
+	def forward(self, ref_feat, src_feat):
+
+		if ref_feat.shape[0] == 0 or src_feat.shape[0] == 0:
+			# no points → return empty tensor
+			return None
+
+		prior = ref_feat * src_feat
+		N, C = ref_feat.shape
+		post = self.attn(prior, prior, prior)[0]
+		o = prior + post
+		out = self.proj(o)
+		return out.max(dim=0, keepdim=True).values
 
 class FeatureConsistencyWeighting(nn.Module):
 	def __init__(self, feat_dim=256, hidden_dim=32, radius=0.03):
