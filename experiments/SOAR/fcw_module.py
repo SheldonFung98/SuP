@@ -67,11 +67,11 @@ class FeatureConsistencyWeighting(nn.Module):
 		failed_inds = failed.nonzero().flatten()
 		reasonable_inds = reasonable.nonzero().flatten()
 
-		num = 4
+		num = 8
 		sel_ind = torch.cat([
-			torch.randperm(success_inds.shape[0])[:num], 
-			torch.randperm(failed_inds.shape[0])[:num],
-			torch.randperm(reasonable_inds.shape[0])[:num]
+			success_inds[torch.randperm(success_inds.shape[0])][:num], 
+			failed_inds[torch.randperm(failed_inds.shape[0])][:num],
+			reasonable_inds[torch.randperm(reasonable_inds.shape[0])][:num]
 		])
 
 		return tf_est[sel_ind], sel_ind
