@@ -76,7 +76,7 @@ class WeightingNet(nn.Module):
 
 		o = prior + post
 		out = self.proj(o)
-		return out.sum(dim=0, keepdim=True)
+		return out.max(dim=0, keepdim=True).values
 
 class FeatureConsistencyWeighting(nn.Module):
 	def __init__(self, feat_dim=256, hidden_dim=32, radius=0.03):
