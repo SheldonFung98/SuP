@@ -420,7 +420,7 @@ class GeoTransformer(nn.Module):
 		w3 = weights[:, 3]
 		w3 = w3 / w3.max()
 		with torch.no_grad():
-			merged_weights = weights[:, 1] + 1.2 * weights[:, 4]
+			merged_weights = weights[:, 1] + 0.5 * weights[:, 4]
 			# merged_weights = weights[:, 1] + 0.4 * weights[:, 4]
 
 		merged_weights[merged_weights.isnan()] = 0

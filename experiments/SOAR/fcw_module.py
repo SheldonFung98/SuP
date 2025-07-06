@@ -54,7 +54,7 @@ class WeightingNet(nn.Module):
 		prior = ref_feat * src_feat
 		N, C = ref_feat.shape
 		post = self.attn(prior, prior, prior)[0]
-		o = prior + post
+		o = prior + F.normalize(post)
 		out = self.proj(o)
 		return out.max(dim=0, keepdim=True).values
 
@@ -187,7 +187,7 @@ class FeatureConsistencyWeighting(nn.Module):
 
 		# m = torch.einsum("nd,nd->n", ref_feats_f_sel[r_idx], src_feats_f_sel[s_idx])
 		# w_f = self.get_weight(m, split_sizes, k=k)
-		# # w = (w_f + w_m) / 2  # average weights from feature and consistency
-		# w = w_f + w_m
+		# w = (w_f + w_m) / 2  # average weights from feature and consistency
+		# # w = w_f + w_m
 		return w, sel_tf_ind
 
