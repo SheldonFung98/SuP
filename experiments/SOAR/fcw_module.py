@@ -31,32 +31,115 @@ import torch.nn.functional as F
 # 		out = self.proj(o)
 # 		return out.max(dim=0, keepdim=True).values
 
+# class WeightingNet(nn.Module):
+
+# 	def __init__(self, num_clusters=768, dim=768):
+# 		super().__init__()
+# 		self.num_clusters = num_clusters
+# 		self.dim = dim
+# 		# self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
+# 		self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=8, batch_first=True)
+
+# 		self.proj = nn.Sequential(
+# 			nn.Linear(dim, 64),
+# 			nn.PReLU(),
+# 		)
+
+# 	def forward(self, ref_feat, src_feat):
+
+# 		if ref_feat.shape[0] == 0 or src_feat.shape[0] == 0:
+# 			# no points → return empty tensor
+# 			return None
+
+# 		prior = ref_feat * src_feat
+# 		N, C = ref_feat.shape
+# 		post = self.attn(prior, prior, prior)[0]
+# 		o = prior + F.normalize(post)
+# 		out = self.proj(o)
+# 		return out.max(dim=0, keepdim=True).values
+
+
 class WeightingNet(nn.Module):
-
-	def __init__(self, num_clusters=768, dim=768):
+	def __init__(
+		self,
+		in_dim: int = 768,
+		out_dim: int = 64,
+		num_clusters: int = 8,
+		num_heads: int = 8,
+		ff_multiplier: int = 4,
+		dropout: float = 0.1,
+	):
 		super().__init__()
+		self.in_dim       = in_dim
+		self.out_dim      = out_dim
 		self.num_clusters = num_clusters
-		self.dim = dim
-		# self.conv = nn.Conv2d(dim, num_clusters, kernel_size=(1, 1), bias=True)
-		self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=8, batch_first=True)
 
+		# 1×1 conv for soft‐assignment to K clusters
+		# takes [1, in_dim, N] → [1, num_clusters, N]
+		self.cluster_conv = nn.Conv1d(in_dim, num_clusters, kernel_size=1, bias=True)
+
+		# Transformer‐style block over K cluster tokens
+		self.norm1    = nn.LayerNorm(in_dim)
+		self.attn     = nn.MultiheadAttention(embed_dim=in_dim, num_heads=num_heads, batch_first=True)
+		self.dropout1 = nn.Dropout(dropout)
+
+		self.norm2    = nn.LayerNorm(in_dim)
+		self.ffn      = nn.Sequential(
+			nn.Linear(in_dim, in_dim * ff_multiplier),
+			nn.GELU(),
+			nn.Dropout(dropout),
+			nn.Linear(in_dim * ff_multiplier, in_dim),
+		)
+		self.dropout2 = nn.Dropout(dropout)
+
+		# final proj head to out_dim
 		self.proj = nn.Sequential(
-			nn.Linear(dim, 64),
-			nn.PReLU(),
+			nn.Linear(in_dim, out_dim),
+			nn.GELU(),
 		)
 
-	def forward(self, ref_feat, src_feat):
-
+	def forward(self, ref_feat: torch.Tensor, src_feat: torch.Tensor) -> torch.Tensor:
+		"""
+		ref_feat, src_feat: [N, in_dim]
+		→ returns [1, out_dim] (pooled over clusters) or [0, out_dim] if N=0
+		"""
+		N = ref_feat.size(0)
 		if ref_feat.shape[0] == 0 or src_feat.shape[0] == 0:
 			# no points → return empty tensor
 			return None
+		# 1) pointwise product
+		prior = ref_feat * src_feat                   # [N, in_dim]
 
-		prior = ref_feat * src_feat
-		N, C = ref_feat.shape
-		post = self.attn(prior, prior, prior)[0]
-		o = prior + F.normalize(post)
-		out = self.proj(o)
-		return out.max(dim=0, keepdim=True).values
+		# 2) soft‐assign clusters
+		#    conv1d wants [B, C, L] = [1, in_dim, N]
+		x = prior.transpose(0,1).unsqueeze(0)         # [1, in_dim, N]
+		logits = self.cluster_conv(x)                 # [1, num_clusters, N]
+		assign = F.softmax(logits, dim=1)             # softmax over cluster dim
+													 # → [1, num_clusters, N]
+
+		# 3) build K “cluster tokens” by weighted sum of points
+		#    torch.matmul([1,K,N], [1,N,in_dim]) → [1,K,in_dim]
+		cluster_tokens = torch.matmul(assign, prior.unsqueeze(0))
+
+		# 4) Transformer block on these K tokens
+		# 4a) Self‐attn with pre‐norm + residual
+		y = self.norm1(cluster_tokens)               # [1, K, in_dim]
+		attn_out, _ = self.attn(y, y, y)              # [1, K, in_dim]
+		cluster_tokens = cluster_tokens + self.dropout1(attn_out)
+
+		# 4b) FFN with post‐norm + residual
+		y = self.norm2(cluster_tokens)               # [1, K, in_dim]
+		ffn_out     = self.ffn(y)                     # [1, K, in_dim]
+		cluster_tokens = cluster_tokens + self.dropout2(ffn_out)
+
+		# 5) project each cluster‐token to out_dim
+		#    → [1, K, out_dim]
+		out_tokens = self.proj(cluster_tokens)
+
+		# 6) max‐pool across clusters → [1, out_dim]
+		pooled, _ = out_tokens.max(dim=1, keepdim=True)
+		return pooled.squeeze(1)
+
 
 class FeatureConsistencyWeighting(nn.Module):
 	def __init__(self, feat_dim=256, hidden_dim=32, radius=0.03):
