@@ -33,11 +33,11 @@ std::vector<at::Tensor> grid_subsampling_dps(
   );
   std::vector<PointXYZ> vec_s_dps;
 
-  std::vector<long> vec_lengths = std::vector<long>(
-    lengths.data_ptr<long>(),
-    lengths.data_ptr<long>() + batch_size
+  std::vector<int64_t> vec_lengths = std::vector<int64_t>(
+    lengths.data_ptr<int64_t>(),
+    lengths.data_ptr<int64_t>() + batch_size
   );
-  std::vector<long> vec_s_lengths;
+  std::vector<int64_t> vec_s_lengths;
   // step into 1.2.1.1.1.1 : 下采样
   grid_subsampling_cpu(
     vec_points,
@@ -54,16 +54,16 @@ std::vector<at::Tensor> grid_subsampling_dps(
   std::size_t total_s_dps = vec_s_dps.size();
 
   at::Tensor s_points = torch::zeros(
-    {total_s_points, 3},
+    {static_cast<int64_t>(total_s_points), static_cast<int64_t>(3)},
     at::device(points.device()).dtype(at::ScalarType::Float)
   );
   at::Tensor s_lengths = torch::zeros(
-    {batch_size},
+    {static_cast<int64_t>(batch_size)},
     at::device(lengths.device()).dtype(at::ScalarType::Long)
   );
 
   at::Tensor s_dps = torch::zeros(
-    {total_s_dps, 3},
+    {static_cast<int64_t>(total_s_dps), static_cast<int64_t>(3)},
     at::device(dps.device()).dtype(at::ScalarType::Float)
   );
 
@@ -79,9 +79,9 @@ std::vector<at::Tensor> grid_subsampling_dps(
     sizeof(float) * total_s_dps * 3
   );
   std::memcpy(
-    s_lengths.data_ptr<long>(),
+    s_lengths.data_ptr<int64_t>(),
     vec_s_lengths.data(),
-    sizeof(long) * batch_size
+    sizeof(int64_t) * batch_size
   );
 
 
