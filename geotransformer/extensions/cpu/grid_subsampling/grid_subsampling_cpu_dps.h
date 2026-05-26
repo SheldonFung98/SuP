@@ -33,8 +33,8 @@ void grid_subsampling_cpu(
   std::vector<PointXYZ>& s_points,
   std::vector<PointXYZ>& dps,
   std::vector<PointXYZ>& s_dps,
-  std::vector<long>& o_lengths,
-  std::vector<long>& s_lengths,
+  std::vector<int64_t>& o_lengths,
+  std::vector<int64_t>& s_lengths,
   float voxel_size
 );
 

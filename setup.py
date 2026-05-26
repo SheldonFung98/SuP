@@ -1,5 +1,19 @@
+import platform
+
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+
+
+if platform.system() == "Windows":
+    extra_compile_args = {
+        "cxx": ["/O2", "/std:c++17", "/DNOMINMAX", "/EHsc"],
+        "nvcc": ["-O3", "-std=c++17"],
+    }
+else:
+    extra_compile_args = {
+        "cxx": ["-O3", "-std=c++17"],
+        "nvcc": ["-O3", "-std=c++17"],
+    }
 
 
 setup(
@@ -18,6 +32,7 @@ setup(
                 'geotransformer/extensions/cpu/radius_neighbors/radius_neighbors_cpu.cpp',
                 'geotransformer/extensions/pybind.cpp',
             ],
+            extra_compile_args=extra_compile_args,
         ),
     ],
     cmdclass={'build_ext': BuildExtension},

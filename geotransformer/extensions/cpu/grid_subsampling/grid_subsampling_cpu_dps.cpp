@@ -7,7 +7,7 @@ void single_grid_subsampling_cpu(
   std::vector<PointXYZ>& s_points,  // 要装的vector
   std::vector<PointXYZ>& dps,
   std::vector<PointXYZ>& s_dps,
-//  std::vector<long>& s_indexes,
+//  std::vector<int64_t>& s_indexes,
   float voxel_size
 ) {
 
@@ -72,8 +72,8 @@ void grid_subsampling_cpu(
   std::vector<PointXYZ>& s_points,
   std::vector<PointXYZ>& dps,
   std::vector<PointXYZ>& s_dps,
-  std::vector<long>& lengths,
-  std::vector<long>& s_lengths,
+  std::vector<int64_t>& lengths,
+  std::vector<int64_t>& s_lengths,
   float voxel_size
 ) {
   std::size_t start_index = 0;
@@ -92,7 +92,7 @@ void grid_subsampling_cpu(
     );
     std::vector<PointXYZ> cur_s_points;
     std::vector<PointXYZ> cur_s_dps;
-//    std::vector<long> cur_s_indexes;
+//    std::vector<int64_t> cur_s_indexes;
 
 //    single_grid_subsampling_cpu(cur_points, cur_s_points, cur_s_indexes, voxel_size);
 
